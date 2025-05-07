@@ -153,7 +153,7 @@ def show_results(original, outputs):
     plt.show()
 
 if __name__ == '__main__':
-    img = cv2.imread('ex2.jpg', cv2.IMREAD_GRAYSCALE)
+    img = cv2.imread('ex3.png', cv2.IMREAD_GRAYSCALE)
     if img is None:
         raise FileNotFoundError('Không tìm thấy input.png')
     outputs = full_restoration(img)
