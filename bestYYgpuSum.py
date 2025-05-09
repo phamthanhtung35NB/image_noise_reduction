@@ -1,11 +1,11 @@
-import numpy as np
+import numpy as np 
 import cv2
-import time
-import os
-import warnings
-from datetime import datetime
-import glob
-import argparse
+import time 
+import os # Dùng để tạo thư mục và lưu ảnh
+import warnings # Dùng để bỏ qua các cảnh báo
+from datetime import datetime 
+import glob # Dùng đệ quy tìm kiếm file
+import argparse # Dùng để xử lý các tham số đầu vào từ dòng lệnh
 
 # Bỏ qua các cảnh báo
 warnings.filterwarnings("ignore")
@@ -20,114 +20,194 @@ system_info = {
     'restore_time': 0.0 # Thời gian khôi phục
 }
 
-# Khôi phục ảnh bằng bộ lọc trung vị (ảnh nhiễu - cờ nhiễu sau chạy 2 hệ thống - kích thước cửa sổ)
-#img: ảnh đầu vào (đơn vị la ảnh xám) 
-#noise_flag: cờ nhiễu (1 cho nhiễu, 0 cho không nhiễu)
-#window_size: kích thước cửa sổ (đơn vị là pixel)
+
 def fast_median_filter(img, noise_flag, window_size):
-    height, width = img.shape # Lấy kích thước ảnh
-    half_window = window_size // 2 # Tính kích thước nửa cửa sổ
-    result = img.copy()  # Giữ các pixel không nhiễu nguyên vẹn
+    """
+    Khôi phục ảnh bằng bộ lọc trung vị có chọn lọc - chỉ áp dụng lọc cho những điểm được phát hiện là nhiễu.
     
-    # Lấy tọa độ các điểm nhiễu
+    Tham số:
+    - img: Ảnh đầu vào cần được khôi phục
+    - noise_flag: Mặt nạ nhị phân đánh dấu vị trí của các điểm nhiễu (1: nhiễu, 0: không nhiễu)
+    - window_size: Kích thước cửa sổ bộ lọc trung vị (thường là 3, 5, 7...)
+    
+    Kết quả:
+    - Ảnh đã được khôi phục
+    """
+    height, width = img.shape # Lấy kích thước ảnh (số hàng và số cột)
+    half_window = window_size // 2 # Tính bán kính cửa sổ (ví dụ: window_size=3 thì half_window=1)
+    result = img.copy()  # Sao chép ảnh gốc - các pixel không nhiễu sẽ giữ nguyên giá trị
+    
+    # Xác định vị trí các điểm nhiễu từ mặt nạ noise_flag
+    # np.where trả về tọa độ của tất cả các điểm có giá trị = 1 trong mặt nạ nhiễu
     noise_points = np.where(noise_flag == 1)
-    # Tạo danh sách tọa độ cho các điểm nhiễu
+    # Ghép cặp tọa độ x, y thành danh sách các điểm (i, j)
     noise_coords = list(zip(noise_points[0], noise_points[1]))
     
+    # Xử lý từng điểm nhiễu một
     for i, j in noise_coords:
-        # Xác định vùng cửa sổ
-        # i_min, i_max: giới hạn trên và dưới của hàng
-        i_min = max(0, i - half_window)
-        i_max = min(height, i + half_window + 1)
-        # j_min, j_max: giới hạn trái và phải của cột
-        j_min = max(0, j - half_window)
-        j_max = min(width, j + half_window + 1)
+        # BƯỚC 2.1: Xác định vùng lân cận (cửa sổ) xung quanh điểm nhiễu
+        # Đảm bảo không vượt quá biên của ảnh
+        i_min = max(0, i - half_window)  # Giới hạn hàng trên
+        i_max = min(height, i + half_window + 1)  # Giới hạn hàng dưới
+        j_min = max(0, j - half_window)  # Giới hạn cột trái
+        j_max = min(width, j + half_window + 1)  # Giới hạn cột phải
         
-        # Lấy cửa sổ và mặt nạ nhiễu tương ứng
+        # BƯỚC 2.2: Trích xuất vùng cửa sổ và mặt nạ nhiễu tương ứng
+        # Lấy giá trị của các pixel trong vùng cửa sổ
         window = img[i_min:i_max, j_min:j_max]
+        # Lấy giá trị mặt nạ nhiễu tương ứng với vùng cửa sổ
         window_mask = noise_flag[i_min:i_max, j_min:j_max]
         
-        # Lấy các pixel không nhiễu trong cửa sổ
+        # BƯỚC 2.3: Chỉ sử dụng các pixel không nhiễu trong cửa sổ để tính trung vị
+        # Lọc ra các pixel không nhiễu (có giá trị mặt nạ = 0)
         good_pixels = window[window_mask == 0]
         
-        # Nếu có pixel tốt, lấy giá trị trung vị từ các pixel đó
+        # BƯỚC 2.4: Tính giá trị trung vị và gán cho điểm nhiễu
         if len(good_pixels) > 0:
+            # Nếu có ít nhất một pixel không nhiễu trong cửa sổ,
+            # sử dụng giá trị trung vị của các pixel không nhiễu
             result[i, j] = np.median(good_pixels)
         else:
-            # Nếu không có pixel tốt, lấy trung vị của toàn bộ cửa sổ
+            # Nếu tất cả các pixel trong cửa sổ đều là nhiễu,
+            # sử dụng giá trị trung vị của toàn bộ cửa sổ (kể cả các điểm nhiễu)
+            # Đây là trường hợp xấu nhất nhưng ít khi xảy ra
             result[i, j] = np.median(window)
     
+    # Trả về ảnh đã được khôi phục
     return result
 
-    """Tạo ảnh cờ nhiễu tối ưu hóa"""
+
 def create_noise_flag(img, filtered_img, threshold):
+    """
+    Tạo ảnh cờ nhiễu bằng cách so sánh ảnh gốc với ảnh đã lọc.
+    
+    Tham số:
+    - img: Ảnh gốc (có thể chứa nhiễu)
+    - filtered_img: Ảnh đã được lọc (thường là kết quả từ bộ lọc trung vị)
+    - threshold: Ngưỡng để xác định một pixel có phải là nhiễu hay không
+    
+    Kết quả trả về:
+    - Mặt nạ nhị phân (1: điểm nhiễu, 0: điểm không nhiễu)
+    """
+    # Tính sự khác biệt giữa ảnh gốc và ảnh được lọc
+    # Chuyển đổi sang kiểu int32 để tránh tràn số khi tính toán hiệu
     diff = np.abs(img.astype(np.int32) - filtered_img.astype(np.int32))
+    
+    # Tạo mặt nạ nhị phân ban đầu (toàn bộ là 0 - không phải nhiễu)
     noise_flag = np.zeros_like(img, dtype=np.uint8)
+    
+    # Đánh dấu các điểm có sự khác biệt lớn hơn hoặc bằng ngưỡng là điểm nhiễu
+    # Ý tưởng: Nếu giá trị pixel trước và sau khi lọc khác nhau nhiều,
+    # thì pixel đó có khả năng cao là nhiễu
     noise_flag[diff >= threshold] = 1
+    
+    # Trả về mặt nạ nhị phân đánh dấu các điểm nhiễu
     return noise_flag
 
-    """Xác minh các điểm nhiễu trong vùng biên - phiên bản tối ưu"""
+
 def verify_edge_noise(img, f_noise, F_edge, TN, TC, TR, G=255):
-    # Chuyển sang kiểu int32 để tránh tràn số
+    """
+    Hàm xác minh các điểm nhiễu trong vùng biên bằng cách so sánh với các điểm nhiễu trong vùng phẳng.
+    Mục đích: Loại bỏ các điểm biên bị phát hiện nhầm thành nhiễu.
+    
+    Tham số:
+    - img: ảnh đầu vào (ảnh xám)
+    - f_noise: ảnh cờ nhiễu từ Hệ thống 1 (1: điểm nhiễu, 0: điểm không nhiễu)
+    - F_edge: ảnh cờ biên đã được dãn nở (1: điểm thuộc biên, 0: điểm thuộc vùng phẳng)
+    - TN: ngưỡng hiệu cường độ để so sánh giữa các điểm nhiễu
+    - TC: số lượng tối thiểu điểm nhiễu trong vùng phẳng cần có để thực hiện so sánh
+    - TR: tỷ lệ ngưỡng (nếu tỷ lệ điểm nhiễu tương đồng thấp hơn ngưỡng này, điểm sẽ bị loại bỏ)
+    - G: giá trị cường độ tối đa của ảnh (mặc định là 255 cho ảnh 8-bit)
+    
+    Kết quả trả về:
+    - F_noise: ảnh cờ nhiễu sau khi đã loại bỏ các điểm phát hiện sai
+    - removed_count: số lượng điểm bị loại bỏ
+    """
+    # Chuyển ảnh sang kiểu int32 để tránh tràn số khi tính toán hiệu các pixel
     img_int = img.astype(np.int32)
+    # Sao chép ảnh cờ nhiễu để không làm thay đổi đầu vào
     F_noise = f_noise.copy()
     
-    # Lấy tọa độ của tất cả điểm nhiễu trong vùng phẳng
+    # Lấy danh sách các điểm nhiễu trong vùng phẳng làm tham chiếu
+    # Điều kiện: (f_noise == 1) là điểm nhiễu VÀ (F_edge == 0) là điểm thuộc vùng phẳng
     flat_noise_points = np.where((f_noise == 1) & (F_edge == 0))
+    # Tạo danh sách các tọa độ (i,j) từ kết quả np.where
     flat_noise_coords = list(zip(flat_noise_points[0], flat_noise_points[1]))
     
-    # Lấy giá trị cường độ của các điểm nhiễu vùng phẳng
+    # Lấy giá trị cường độ của tất cả các điểm nhiễu trong vùng phẳng
+    # Giá trị này sẽ được dùng để so sánh với các điểm nhiễu trong vùng biên
     flat_values = np.array([img_int[i, j] for i, j in flat_noise_coords])
     
-    # Phân loại các điểm nhiễu vùng phẳng thành hai nhóm: dương và âm
-    flat_values_pos = flat_values[flat_values >= G/2]
-    flat_values_neg = flat_values[flat_values < G/2]
+    # Phân loại các điểm nhiễu vùng phẳng thành hai nhóm dựa trên cường độ
+    # - Nhóm dương (nhiễu muối): cường độ >= G/2 (thường là 128)
+    # - Nhóm âm (nhiễu tiêu): cường độ < G/2
+    flat_values_pos = flat_values[flat_values >= G/2]  # Điểm nhiễu dương (muối)
+    flat_values_neg = flat_values[flat_values < G/2]   # Điểm nhiễu âm (tiêu)
     
-    # Lấy tọa độ của tất cả điểm nhiễu trong vùng biên cần xác minh
+    # Lấy danh sách các điểm nhiễu trong vùng biên cần xác minh
+    # Điều kiện: (f_noise == 1) là điểm nhiễu VÀ (F_edge == 1) là điểm thuộc vùng biên
     edge_noise_points = np.where((f_noise == 1) & (F_edge == 1))
+    # Tạo danh sách các tọa độ (i,j) từ kết quả np.where
     edge_noise_coords = list(zip(edge_noise_points[0], edge_noise_points[1]))
     
-    # Sử dụng phương pháp batch để tăng tốc
-    batch_size = min(1000, len(edge_noise_coords))  # Số điểm xử lý mỗi lần
+    # Chuẩn bị xử lý theo batch để tối ưu hóa bộ nhớ và hiệu suất
+    # Kích thước batch là 1000 điểm hoặc ít hơn nếu tổng số điểm ít hơn 1000
+    batch_size = min(1000, len(edge_noise_coords))  
+    # Tính số batch cần xử lý
     num_batches = (len(edge_noise_coords) + batch_size - 1) // batch_size
     
+    # Biến đếm số điểm bị loại bỏ sau khi xác minh
     removed_count = 0
     
-    # Xử lý theo batch để tránh tràn bộ nhớ
+    # Xử lý từng batch các điểm nhiễu trong vùng biên
     for b in range(num_batches):
+        # Tính chỉ số bắt đầu và kết thúc của batch hiện tại
         start_idx = b * batch_size
         end_idx = min((b + 1) * batch_size, len(edge_noise_coords))
         
+        # Hiển thị thông tin tiến trình mỗi 10 batch
         if b % 10 == 0 and b > 0:
             print(f"Đã xử lý {start_idx}/{len(edge_noise_coords)} điểm, loại bỏ {removed_count} điểm")
         
-        # Lấy batch hiện tại
+        # Lấy danh sách các điểm cần xử lý trong batch hiện tại
         current_batch = edge_noise_coords[start_idx:end_idx]
         
+        # Xét từng điểm nhiễu trong batch hiện tại
         for i, j in current_batch:
+            # Lấy giá trị cường độ của điểm hiện tại
             z_ij = img_int[i, j]
             
-            # Chọn danh sách giá trị phù hợp dựa trên cường độ
+            # So sánh điểm nhiễu vùng biên với các điểm nhiễu vùng phẳng cùng loại
+            # Xét trường hợp điểm nhiễu dương (nhiễu muối)
             if z_ij >= G/2 and len(flat_values_pos) >= TC:
-                # Tính chênh lệch với tất cả các giá trị dương
+                # Tính chênh lệch cường độ với tất cả các điểm nhiễu dương trong vùng phẳng
                 diffs = np.abs(flat_values_pos - z_ij)
+                # Đếm số điểm có chênh lệch nhỏ hơn hoặc bằng ngưỡng TN
                 M1 = np.sum(diffs <= TN)
+                # Tính tỷ lệ điểm tương đồng
                 R = M1 / len(flat_values_pos)
                 
+                # Nếu tỷ lệ điểm tương đồng thấp hơn ngưỡng TR, loại bỏ điểm khỏi danh sách nhiễu
+                # Ý tưởng: Nếu điểm này không giống với đa số điểm nhiễu trong vùng phẳng, có thể đây không phải là nhiễu
                 if R < TR:
-                    F_noise[i, j] = 0
-                    removed_count += 1
-                    
+                    F_noise[i, j] = 0  # Đánh dấu không phải nhiễu
+                    removed_count += 1  # Tăng biến đếm
+            
+            # Xét trường hợp điểm nhiễu âm (nhiễu tiêu)       
             elif z_ij < G/2 and len(flat_values_neg) >= TC:
-                # Tính chênh lệch với tất cả các giá trị âm
+                # Tính chênh lệch cường độ với tất cả các điểm nhiễu âm trong vùng phẳng
                 diffs = np.abs(flat_values_neg - z_ij)
+                # Đếm số điểm có chênh lệch nhỏ hơn hoặc bằng ngưỡng TN
                 M1 = np.sum(diffs <= TN)
+                # Tính tỷ lệ điểm tương đồng
                 R = M1 / len(flat_values_neg)
                 
+                # Nếu tỷ lệ điểm tương đồng thấp hơn ngưỡng TR, loại bỏ điểm khỏi danh sách nhiễu
                 if R < TR:
-                    F_noise[i, j] = 0
-                    removed_count += 1
+                    F_noise[i, j] = 0  # Đánh dấu không phải nhiễu
+                    removed_count += 1  # Tăng biến đếm
     
+    # Trả về kết quả sau khi xác minh
     return F_noise, removed_count
 
     
@@ -168,7 +248,7 @@ class ImpulseNoiseDetector:
         # Tính ảnh cờ nhiễu
         return create_noise_flag(img, filtered_img, threshold)
     
-        def _system1(self, img):
+    def _system1(self, img):
         """
         Triển khai Hệ thống 1 - Phát hiện nhiễu dựa trên ảnh cờ biên.
         Hệ thống này phân biệt giữa các vùng biên và vùng phẳng, 
@@ -181,7 +261,7 @@ class ImpulseNoiseDetector:
         # Lấy kích thước của ảnh đầu vào
         height, width = img.shape
         
-        # BƯỚC 1: Tạo các ảnh cờ nhiễu cho vùng biên và vùng phẳng
+        # Tạo các ảnh cờ nhiễu cho vùng biên và vùng phẳng
         print("Tạo ảnh cờ nhiễu từ hai bộ lọc trung vị...")
         # f_WD1: ảnh cờ nhiễu cho vùng biên - sử dụng cửa sổ lớn hơn (WD1)
         # Hàm _create_noise_flag_PSM tạo cờ nhiễu dựa trên Peak-Signal-to-Median (PSM)
@@ -191,25 +271,25 @@ class ImpulseNoiseDetector:
         # Phát hiện nhiễu trong vùng phẳng yêu cầu cửa sổ nhỏ hơn để tăng độ nhạy
         f_WD2 = self._create_noise_flag_PSM(img, self.WD2, self.TD)
         
-        # BƯỚC 2: Phát hiện biên trong ảnh
+        # Phát hiện biên trong ảnh
         print("Phát hiện biên bằng phương pháp thay thế...")
         # Sử dụng thuật toán Canny để phát hiện biên - một thuật toán phát hiện biên phổ biến
         # Các tham số 50, 150 là ngưỡng thấp và cao cho thuật toán Canny
         edges = cv2.Canny(img, 50, 150)
         
-        # BƯỚC 3: Dãn nở biên để bao phủ vùng biên tốt hơn
+        # Dãn nở biên để bao phủ vùng biên tốt hơn
         # Tạo kernel 3x3 cho phép toán dãn nở
         kernel = np.ones((3, 3), np.uint8)
         # Dãn nở biên để đảm bảo không bỏ sót các điểm biên
         edges_dilated = cv2.dilate(edges, kernel, iterations=1)
         
-        # BƯỚC 4: Tạo ảnh cờ biên (edge flag)
+        # Tạo ảnh cờ biên (edge flag)
         # Ảnh cờ biên là ảnh nhị phân: 1 cho điểm biên, 0 cho điểm không phải biên
         f_edge = np.zeros_like(img, dtype=np.uint8)
         # Đặt giá trị 1 cho tất cả các điểm trong ảnh đã dãn nở
         f_edge[edges_dilated > 0] = 1
         
-        # BƯỚC 5: Kết hợp hai ảnh cờ nhiễu dựa trên ảnh cờ biên
+        # Kết hợp hai ảnh cờ nhiễu dựa trên ảnh cờ biên
         # Tạo ảnh cờ nhiễu cuối cùng theo phương trình (9) của thuật toán
         f_noise = np.zeros_like(img, dtype=np.uint8)
         # Đối với vùng biên (f_edge == 1), sử dụng kết quả từ f_WD1
@@ -217,7 +297,7 @@ class ImpulseNoiseDetector:
         # Đối với vùng phẳng (f_edge == 0), sử dụng kết quả từ f_WD2
         f_noise[f_edge == 0] = f_WD2[f_edge == 0]
         
-        # BƯỚC 6: Lưu các kết quả trung gian để hiển thị và đánh giá
+        # Lưu các kết quả trung gian để hiển thị và đánh giá
         # Lưu các ảnh với hệ số nhân 255 để dễ nhìn (chuyển từ nhị phân [0,1] sang [0,255])
         self.intermediate_results['edge_detection'] = edges  # Kết quả phát hiện biên gốc
         self.intermediate_results['dilated_edges'] = edges_dilated  # Kết quả sau khi dãn nở biên
@@ -335,30 +415,54 @@ class ImpulseNoiseDetector:
 
         #Khôi phục ảnh bị nhiễu xung
     def restore(self, img_gray_noise, original_img=None):  
+        """
+        Phương thức khôi phục ảnh bị nhiễu xung bằng cách phát hiện và loại bỏ nhiễu.
+        
+        Tham số:
+        - img_gray_noise: Ảnh xám bị nhiễu cần khôi phục
+        - original_img: Ảnh gốc (không nhiễu) để tính PSNR và đánh giá hiệu suất (tùy chọn)
+        
+        Kết quả trả về:
+        - Ảnh đã được khôi phục
+        """
+        # Bắt đầu đo thời gian khôi phục
         start_time = time.time()
         print("Bắt đầu quá trình khôi phục ảnh...")
         
-        
-        # Lưu ảnh gốc
+        # Lưu ảnh gốc (không nhiễu) vào danh sách các ảnh trung gian
+        # Ảnh này sẽ được sử dụng để tính PSNR và hiển thị trong bảng so sánh
         self.intermediate_results['original'] = original_img
 
+        # Dòng bị comment - không cần lưu ảnh gốc ra file
         # cv2.imwrite("original.png", self.intermediate_results['original'] )
         
-        # Phát hiện nhiễu xung trong ảnh bằng cách kết hợp cả hai hệ thống.
+        # Phát hiện nhiễu xung trong ảnh
+        # Gọi phương thức detect() kết hợp cả hai hệ thống để xác định vị trí các điểm nhiễu
+        # Kết quả là một mặt nạ nhị phân (0: không phải nhiễu, 1: nhiễu)
         noise_flag = self.detect(img_gray_noise)
         
-        # Sử dụng hàm tối ưu hóa để khôi phục ảnh
-        # Khôi phục ảnh bằng bộ lọc trung vị (ảnh nhiễu - cờ nhiễu sau chạy 2 hệ thống - kích thước cửa sổ)
+        # Khôi phục ảnh bằng bộ lọc trung vị có chọn lọc
+        # Chỉ áp dụng bộ lọc trung vị cho các điểm đã được xác định là nhiễu
+        # Các điểm không phải nhiễu giữ nguyên giá trị ban đầu
         print("Áp dụng bộ lọc trung vị tối ưu hóa để khôi phục...")
+        # Tham số:
+        # - img_gray_noise: ảnh nhiễu đầu vào
+        # - noise_flag: mặt nạ đánh dấu các điểm nhiễu (kết quả từ hệ thống phát hiện)
+        # - 3: kích thước cửa sổ bộ lọc trung vị (3x3)
         restored_img = fast_median_filter(img_gray_noise, noise_flag, 3)
         
-        # Lưu ảnh khôi phục
+        # Lưu kết quả ảnh đã khôi phục để hiển thị và đánh giá
         self.intermediate_results['restored'] = restored_img
         
+        # Tính toán và lưu thời gian thực hiện để đánh giá hiệu suất
         time_taken = time.time() - start_time
         print(f"Thời gian khôi phục ảnh: {time_taken:.2f} giây")
-        # lưu thời gian khôi phục
+        
+        # Lưu thời gian khôi phục vào biến toàn cục system_info
+        # Thông tin này sẽ được hiển thị trong bảng so sánh hiệu suất
         system_info['restore_time'] = time_taken
+        
+        # Trả về ảnh đã khôi phục
         return restored_img
 
     def write_PERFORMANCE(self, summary_img, title, width, height, row_idx, col_idx, spacing, font_size, font_thickness):
@@ -480,12 +584,24 @@ class ImpulseNoiseDetector:
         
         # Cấu trúc hiển thị: 3 hàng x 4 cột
         image_layout = [
-            # Hàng 1: Ảnh gốc và các bước xử lý chính
-            [('original', 'Original'), ('noisy', 'Noisy'), ('edge_detection', 'Edge Detection'), ('dilated_edges', 'Dilated Edges')],
-            # Hàng 2: Các cờ nhiễu trung gian
-            [('f_WD1', 'f_WD1'), ('f_WD2', 'f_WD2'), ('f_edge', 'f_edge'), ('system1_result', 'System1 Result')],
-            # Hàng 3: Kết quả hệ thống và ảnh đã khôi phục
-            [('dilated_edge_mask', 'Dilated Edge Mask'), ('system2_result', 'System2 Result'), ('restored', 'Restored'), ('psnr', 'Performance Metrics')]
+            # Hàng 1: Ảnh gốc và các bước xử lý ban đầu
+            [('original', 'Original'),   # Ảnh gốc không nhiễu
+             ('noisy', 'Noisy'),  # Ảnh có nhiễu muối tiêu
+             ('edge_detection', 'Edge Detection'),  # Kết quả phát hiện biên từ Canny
+             ('dilated_edges', 'Dilated Edges')],  # Biên sau khi được dãn nở để tạo vùng biên
+        
+            # Hàng 2: Các cờ nhiễu trung gian từ Hệ thống 1
+            [('f_WD1', 'f_WD1'),  # Cờ nhiễu cho vùng biên (dùng cửa sổ lớn WD1)
+             ('f_WD2', 'f_WD2'),     # Cờ nhiễu cho vùng phẳng (dùng cửa sổ nhỏ WD2)
+             ('f_edge', 'f_edge'),   # Ảnh cờ biên nhị phân (1=biên, 0=phẳng)
+             ('system1_result', 'System1 Result')],  # Kết quả cuối cùng từ Hệ thống 1 (kết hợp f_WD1 và f_WD2)
+        
+
+            # Hàng 3: Kết quả cuối cùng và hiệu suất hệ thống
+            [('dilated_edge_mask', 'Dilated Edge Mask'),  # Mặt nạ biên đã dãn nở thêm để dùng trong Hệ thống 2
+             ('system2_result', 'System2 Result'),      # Kết quả sau khi lọc bỏ nhiễu sai từ Hệ thống 2
+             ('restored', 'Restored'),                 # Ảnh đã được khôi phục hoàn chỉnh
+             ('psnr', 'Performance Metrics')]       # Panel hiển thị các chỉ số hiệu suất của thuật toán
         ]
         
         # Lấy kích thước ảnh
@@ -613,13 +729,22 @@ def process_image(input_path, output_dir, noise_level=0.2):
     noisy_img = add_salt_pepper_noise(img, noise_level, noise_level)
     
     # Khởi tạo bộ phát hiện nhiễu
-    # Các tham số cho bộ phát hiện nhiễu
-    # WE1, WE2, TE: Kích thước cửa sổ và ngưỡng cho hệ thống 1
-    # WD1, WD2, TD: Kích thước cửa sổ và ngưỡng cho hệ thống 2
-    # TN: Ngưỡng cho số lượng điểm nhiễu trong vùng biên
-    # TC: Ngưỡng cho số lượng điểm trong vùng phẳng của hệ thống 2
-    # TR: Tỷ lệ cho phép để xác minh điểm nhiễu
+    '''
+    Phát hiện biên:
+    WE1=5: Kích thước cửa sổ 5×5 cho việc phát hiện biên trong vùng phức tạp
+    WE2=7: Kích thước cửa sổ 7×7 cho việc phát hiện biên trong vùng có chi tiết mịn hơn
+    TE=10: Ngưỡng hiệu cường độ để xác định một điểm ảnh có phải là điểm biên hay không
 
+    Phát hiện nhiễu:
+    WD1=7: Kích thước cửa sổ 7×7 cho việc phát hiện nhiễu ở vùng biên (lớn hơn để bao quát được nhiều thông tin biên)
+    WD2=9: Kích thước cửa sổ 9×9 cho việc phát hiện nhiễu ở vùng phẳng (lớn hơn để lấy được thông tin trung bình vùng rộng)
+    TD=30: Ngưỡng sai biệt giữa pixel gốc và pixel sau khi lọc trung vị để xác định một điểm có phải nhiễu hay không
+
+    Xác minh và lọc nhiễu:
+    TN=10: Ngưỡng hiệu cường độ để so sánh giữa điểm nhiễu ở vùng biên và vùng phẳng
+    TC=20: Số lượng tối thiểu điểm nhiễu trong vùng phẳng cần có để thực hiện so sánh với một điểm nhiễu ở vùng biên
+    TR=0.8: Tỷ lệ ngưỡng (80%) - nếu tỷ lệ điểm nhiễu tương đồng thấp hơn ngưỡng này, điểm sẽ bị loại bỏ khỏi danh sách nhiễu
+    '''
     detector = ImpulseNoiseDetector(
         WE1=5, WE2=7, TE=10,
         WD1=7, WD2=9, TD=30,
@@ -705,3 +830,26 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+'''
+image_layout = [
+    # Hàng 1: Ảnh gốc và các bước xử lý ban đầu
+    [('original', 'Original'),   # Ảnh gốc không nhiễu
+    ('noisy', 'Noisy'),  # Ảnh có nhiễu muối tiêu
+    ('edge_detection', 'Edge Detection'),  # Kết quả phát hiện biên từ Canny
+    ('dilated_edges', 'Dilated Edges')],  # Biên sau khi được dãn nở để tạo vùng biên
+
+    # Hàng 2: Các cờ nhiễu trung gian từ Hệ thống 1
+    [('f_WD1', 'f_WD1'),  # Cờ nhiễu cho vùng biên (dùng cửa sổ lớn WD1)
+    ('f_WD2', 'f_WD2'),     # Cờ nhiễu cho vùng phẳng (dùng cửa sổ nhỏ WD2)
+    ('f_edge', 'f_edge'),   # Ảnh cờ biên nhị phân (1=biên, 0=phẳng)
+    ('system1_result', 'System1 Result')],  # Kết quả cuối cùng từ Hệ thống 1 (kết hợp f_WD1 và f_WD2)
+
+
+    # Hàng 3: Kết quả cuối cùng và hiệu suất hệ thống
+    [('dilated_edge_mask', 'Dilated Edge Mask'),  # Mặt nạ biên đã dãn nở thêm để dùng trong Hệ thống 2
+    ('system2_result', 'System2 Result'),      # Kết quả sau khi lọc bỏ nhiễu sai từ Hệ thống 2
+    ('restored', 'Restored'),                 # Ảnh đã được khôi phục hoàn chỉnh
+    ('psnr', 'Performance Metrics')]       # Panel hiển thị các chỉ số hiệu suất của thuật toán
+]
+'''
