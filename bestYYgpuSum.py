@@ -19,20 +19,27 @@ system_info = {
     'total_detection_time': 0.0, # Thời gian phát hiện tổng thể nhiễu
     'restore_time': 0.0 # Thời gian khôi phục
 }
+
+# Khôi phục ảnh bằng bộ lọc trung vị (ảnh nhiễu - cờ nhiễu sau chạy 2 hệ thống - kích thước cửa sổ)
+#img: ảnh đầu vào (đơn vị la ảnh xám) 
+#noise_flag: cờ nhiễu (1 cho nhiễu, 0 cho không nhiễu)
+#window_size: kích thước cửa sổ (đơn vị là pixel)
 def fast_median_filter(img, noise_flag, window_size):
-    """Áp dụng bộ lọc trung vị tối ưu hóa"""
-    height, width = img.shape
-    half_window = window_size // 2
+    height, width = img.shape # Lấy kích thước ảnh
+    half_window = window_size // 2 # Tính kích thước nửa cửa sổ
     result = img.copy()  # Giữ các pixel không nhiễu nguyên vẹn
     
     # Lấy tọa độ các điểm nhiễu
     noise_points = np.where(noise_flag == 1)
+    # Tạo danh sách tọa độ cho các điểm nhiễu
     noise_coords = list(zip(noise_points[0], noise_points[1]))
     
     for i, j in noise_coords:
         # Xác định vùng cửa sổ
+        # i_min, i_max: giới hạn trên và dưới của hàng
         i_min = max(0, i - half_window)
         i_max = min(height, i + half_window + 1)
+        # j_min, j_max: giới hạn trái và phải của cột
         j_min = max(0, j - half_window)
         j_max = min(width, j + half_window + 1)
         
@@ -43,7 +50,7 @@ def fast_median_filter(img, noise_flag, window_size):
         # Lấy các pixel không nhiễu trong cửa sổ
         good_pixels = window[window_mask == 0]
         
-        # Nếu có pixel tốt, lấy giá trị trung vị
+        # Nếu có pixel tốt, lấy giá trị trung vị từ các pixel đó
         if len(good_pixels) > 0:
             result[i, j] = np.median(good_pixels)
         else:
@@ -52,15 +59,15 @@ def fast_median_filter(img, noise_flag, window_size):
     
     return result
 
-def create_noise_flag(img, filtered_img, threshold):
     """Tạo ảnh cờ nhiễu tối ưu hóa"""
+def create_noise_flag(img, filtered_img, threshold):
     diff = np.abs(img.astype(np.int32) - filtered_img.astype(np.int32))
     noise_flag = np.zeros_like(img, dtype=np.uint8)
     noise_flag[diff >= threshold] = 1
     return noise_flag
 
-def verify_edge_noise(img, f_noise, F_edge, TN, TC, TR, G=255):
     """Xác minh các điểm nhiễu trong vùng biên - phiên bản tối ưu"""
+def verify_edge_noise(img, f_noise, F_edge, TN, TC, TR, G=255):
     # Chuyển sang kiểu int32 để tránh tràn số
     img_int = img.astype(np.int32)
     F_noise = f_noise.copy()
@@ -161,99 +168,143 @@ class ImpulseNoiseDetector:
         # Tính ảnh cờ nhiễu
         return create_noise_flag(img, filtered_img, threshold)
     
-    def _system1(self, img):
+        def _system1(self, img):
         """
-        Triển khai Hệ thống 1 - Phát hiện nhiễu dựa trên ảnh cờ biên (phiên bản tối ưu).
+        Triển khai Hệ thống 1 - Phát hiện nhiễu dựa trên ảnh cờ biên.
+        Hệ thống này phân biệt giữa các vùng biên và vùng phẳng, 
+        sau đó áp dụng các cách phát hiện nhiễu khác nhau cho mỗi vùng.
         """
+        # Ghi lại thời điểm bắt đầu để đo thời gian thực hiện
         start_time = time.time()
         print("Bắt đầu Hệ thống 1...")
         
-        # Khởi tạo các ảnh ban đầu
+        # Lấy kích thước của ảnh đầu vào
         height, width = img.shape
         
-        # Tạo ảnh cờ nhiễu f_WD1 và f_WD2 trực tiếp - tối ưu hóa lớn
+        # BƯỚC 1: Tạo các ảnh cờ nhiễu cho vùng biên và vùng phẳng
         print("Tạo ảnh cờ nhiễu từ hai bộ lọc trung vị...")
+        # f_WD1: ảnh cờ nhiễu cho vùng biên - sử dụng cửa sổ lớn hơn (WD1)
+        # Hàm _create_noise_flag_PSM tạo cờ nhiễu dựa trên Peak-Signal-to-Median (PSM)
         f_WD1 = self._create_noise_flag_PSM(img, self.WD1, self.TD)
+        
+        # f_WD2: ảnh cờ nhiễu cho vùng phẳng - sử dụng cửa sổ nhỏ hơn (WD2)
+        # Phát hiện nhiễu trong vùng phẳng yêu cầu cửa sổ nhỏ hơn để tăng độ nhạy
         f_WD2 = self._create_noise_flag_PSM(img, self.WD2, self.TD)
         
-        # Tạo ảnh cờ biên sử dụng thuật toán Canny
+        # BƯỚC 2: Phát hiện biên trong ảnh
         print("Phát hiện biên bằng phương pháp thay thế...")
+        # Sử dụng thuật toán Canny để phát hiện biên - một thuật toán phát hiện biên phổ biến
+        # Các tham số 50, 150 là ngưỡng thấp và cao cho thuật toán Canny
         edges = cv2.Canny(img, 50, 150)
         
-        # Dãn nở cạnh để bao phủ vùng biên tốt hơn
+        # BƯỚC 3: Dãn nở biên để bao phủ vùng biên tốt hơn
+        # Tạo kernel 3x3 cho phép toán dãn nở
         kernel = np.ones((3, 3), np.uint8)
+        # Dãn nở biên để đảm bảo không bỏ sót các điểm biên
         edges_dilated = cv2.dilate(edges, kernel, iterations=1)
         
-        # Ánh xạ kết quả phát hiện biên sang ảnh cờ biên
+        # BƯỚC 4: Tạo ảnh cờ biên (edge flag)
+        # Ảnh cờ biên là ảnh nhị phân: 1 cho điểm biên, 0 cho điểm không phải biên
         f_edge = np.zeros_like(img, dtype=np.uint8)
+        # Đặt giá trị 1 cho tất cả các điểm trong ảnh đã dãn nở
         f_edge[edges_dilated > 0] = 1
         
-        # Tạo ảnh cờ nhiễu cuối cùng theo phương trình (9)
+        # BƯỚC 5: Kết hợp hai ảnh cờ nhiễu dựa trên ảnh cờ biên
+        # Tạo ảnh cờ nhiễu cuối cùng theo phương trình (9) của thuật toán
         f_noise = np.zeros_like(img, dtype=np.uint8)
-        f_noise[f_edge == 1] = f_WD1[f_edge == 1]  # Vùng biên
-        f_noise[f_edge == 0] = f_WD2[f_edge == 0]  # Vùng phẳng
+        # Đối với vùng biên (f_edge == 1), sử dụng kết quả từ f_WD1
+        f_noise[f_edge == 1] = f_WD1[f_edge == 1]
+        # Đối với vùng phẳng (f_edge == 0), sử dụng kết quả từ f_WD2
+        f_noise[f_edge == 0] = f_WD2[f_edge == 0]
         
-        # Lưu kết quả trung gian
-        self.intermediate_results['edge_detection'] = edges
-        self.intermediate_results['dilated_edges'] = edges_dilated
-        self.intermediate_results['f_WD1'] = f_WD1 * 255  # Nhân với 255 để dễ nhìn
-        self.intermediate_results['f_WD2'] = f_WD2 * 255  # Nhân với 255 để dễ nhìn
-        self.intermediate_results['f_edge'] = f_edge * 255  # Nhân với 255 để dễ nhìn
-        self.intermediate_results['system1_result'] = f_noise * 255  # Nhân với 255 để dễ nhìn
+        # BƯỚC 6: Lưu các kết quả trung gian để hiển thị và đánh giá
+        # Lưu các ảnh với hệ số nhân 255 để dễ nhìn (chuyển từ nhị phân [0,1] sang [0,255])
+        self.intermediate_results['edge_detection'] = edges  # Kết quả phát hiện biên gốc
+        self.intermediate_results['dilated_edges'] = edges_dilated  # Kết quả sau khi dãn nở biên
+        self.intermediate_results['f_WD1'] = f_WD1 * 255  # Cờ nhiễu cho vùng biên
+        self.intermediate_results['f_WD2'] = f_WD2 * 255  # Cờ nhiễu cho vùng phẳng
+        self.intermediate_results['f_edge'] = f_edge * 255  # Cờ biên
+        self.intermediate_results['system1_result'] = f_noise * 255  # Kết quả cuối cùng của Hệ thống 1
+        
+        # Tính thời gian thực hiện và hiển thị
         time_taken = time.time() - start_time
         print(f"Hoàn thành Hệ thống 1 trong {time_taken:.2f} giây")
-        # lưu thời gian hệ thống 1
+        
+        # Cập nhật thông tin thời gian cho mục đích đánh giá hiệu suất
         system_info['system1_time'] = time_taken
+        
+        # Trả về hai kết quả: ảnh cờ nhiễu và ảnh cờ biên để sử dụng trong Hệ thống 2
         return f_noise, f_edge
     
+
     def _system2(self, img, f_noise, f_edge):
-        """
-        Triển khai Hệ thống 2 - Hệ thống xác minh (phiên bản tối ưu).
-        """
+        # Bắt đầu đếm thời gian cho Hệ thống 2
         start_time = time.time()
         print("Bắt đầu Hệ thống 2 - Xác minh kết quả từ Hệ thống 1...")
         
-        # Dãn nở ảnh cờ biên để xác định vùng biên rộng hơn
+        # Tạo kernel 3x3 đặc (toàn 1) để thực hiện phép dãn nở
         kernel = np.ones((3, 3), dtype=np.uint8)
+        
+        # Dãn nở ảnh cờ biên để tạo vùng biên rộng hơn
+        # Mục đích: Tạo một vùng đệm xung quanh biên để đảm bảo không bỏ sót điểm biên
         F_edge = cv2.dilate(f_edge, kernel, iterations=1)
         
-        # Đếm số lượng điểm cần xác minh
+        # Đếm số lượng điểm nhiễu trong vùng biên (điểm được đánh dấu là nhiễu và nằm trong vùng biên)
+        # Sử dụng phép AND logic: (f_noise == 1) & (F_edge == 1)
         num_edge_noise = np.sum((f_noise == 1) & (F_edge == 1))
+        
+        # Đếm số lượng điểm nhiễu trong vùng phẳng (điểm được đánh dấu là nhiễu nhưng không thuộc vùng biên)
+        # Sử dụng phép AND logic: (f_noise == 1) & (F_edge == 0)
         num_flat_noise = np.sum((f_noise == 1) & (F_edge == 0))
-
-        # Lưu số lượng điểm nhiễu
+    
+        # Lưu thông tin số lượng nhiễu vào biến toàn cục để hiển thị trong báo cáo
         system_info['edge_noise_count'] = num_edge_noise
         system_info['flat_noise_count'] = num_flat_noise
+        
+        # Hiển thị thông tin về số lượng nhiễu để theo dõi
         print(f"Có {num_edge_noise} điểm nhiễu trong vùng biên cần xác minh")
         print(f"Có {num_flat_noise} điểm nhiễu trong vùng phẳng để so sánh")
         
-        # Lưu kết quả trung gian
-        self.intermediate_results['dilated_edge_mask'] = F_edge * 255  # Nhân với 255 để dễ nhìn
+        # Lưu kết quả trung gian vào danh sách các ảnh trung gian để hiển thị
+        # Nhân với 255 để chuyển từ ảnh nhị phân [0,1] sang dạng [0,255] dễ nhìn
+        self.intermediate_results['dilated_edge_mask'] = F_edge * 255
         
-        # Sử dụng hàm tối ưu hóa để xác minh điểm nhiễu
+        # Thực hiện xác minh nhiễu bằng hàm verify_edge_noise (đã được tối ưu hóa)
         print("Xác minh các điểm nhiễu bằng phương pháp vector hóa...")
+        
+        # Gọi hàm verify_edge_noise với các tham số:
+        # - img: ảnh gốc
+        # - f_noise: ảnh cờ nhiễu từ Hệ thống 1
+        # - F_edge: ảnh cờ biên đã dãn nở
+        # - self.TN: ngưỡng hiệu cường độ để xác định nhiễu
+        # - self.TC: số lượng tối thiểu điểm nhiễu trong vùng phẳng để so sánh
+        # - self.TR: tỷ lệ điểm cần thỏa mãn để xác minh
         F_noise, removed_count = verify_edge_noise(
             img, f_noise, F_edge,
             self.TN, self.TC, self.TR
         )
         
-        # Lưu kết quả trung gian
-        self.intermediate_results['system2_result'] = F_noise * 255  # Nhân với 255 để dễ nhìn
+        # Lưu kết quả cuối cùng của Hệ thống 2 để hiển thị
+        self.intermediate_results['system2_result'] = F_noise * 255
+        
+        # Hiển thị số lượng điểm nhiễu đã bị loại bỏ sau khi xác minh
         print(f"Hệ thống 2 đã loại bỏ {removed_count} điểm bị phát hiện sai")
+        
+        # Tính toán và hiển thị thời gian thực hiện Hệ thống 2
         time_taken = time.time() - start_time
         print(f"Hoàn thành Hệ thống 2 trong {time_taken:.2f} giây")
-
-        # lưu thời gian hệ thống 2
+    
+        # Lưu thời gian thực hiện và số điểm loại bỏ vào thông tin hệ thống
         system_info['system2_time'] = time_taken
         system_info['removed_count'] = removed_count
-
-        
+    
+        # Trả về ảnh cờ nhiễu sau khi đã được xác minh
         return F_noise
     
+    """
+    Phát hiện nhiễu xung trong ảnh bằng cách kết hợp cả hai hệ thống.
+    """
     def detect(self, img):
-        """
-        Phát hiện nhiễu xung trong ảnh bằng cách kết hợp cả hai hệ thống.
-        """
         start_time = time.time()
         
         # Kiểm tra định dạng ảnh đầu vào
@@ -281,25 +332,24 @@ class ImpulseNoiseDetector:
         system_info['total_detection_time'] = time_taken
         return F_noise
     
+
+        #Khôi phục ảnh bị nhiễu xung
     def restore(self, img_gray_noise, original_img=None):  
-        """
-        Khôi phục ảnh bị nhiễu xung bằng cách sử dụng kết quả phát hiện nhiễu.
-        """
         start_time = time.time()
         print("Bắt đầu quá trình khôi phục ảnh...")
         
         
         # Lưu ảnh gốc
         self.intermediate_results['original'] = original_img
-        # Lưu ảnh gốc
+
         # cv2.imwrite("original.png", self.intermediate_results['original'] )
         
         # Phát hiện nhiễu xung trong ảnh bằng cách kết hợp cả hai hệ thống.
         noise_flag = self.detect(img_gray_noise)
         
         # Sử dụng hàm tối ưu hóa để khôi phục ảnh
+        # Khôi phục ảnh bằng bộ lọc trung vị (ảnh nhiễu - cờ nhiễu sau chạy 2 hệ thống - kích thước cửa sổ)
         print("Áp dụng bộ lọc trung vị tối ưu hóa để khôi phục...")
-        # Khôi phục ảnh bằng bộ lọc trung vị (ảnh nhiễu - cờ nhiễu - kích thước cửa sổ)
         restored_img = fast_median_filter(img_gray_noise, noise_flag, 3)
         
         # Lưu ảnh khôi phục
@@ -413,11 +463,9 @@ class ImpulseNoiseDetector:
             cv2.LINE_AA
         )
 
-
+#Tạo ảnh tổng hợp từ các ảnh trung gian với bố cục tối ưu hơn.
     def create_summary_image(self, noisy_img=None):
-        """
-        Tạo ảnh tổng hợp từ các ảnh trung gian với bố cục tối ưu hơn.
-        """
+        
         # Kiểm tra xem có đầy đủ kết quả không
         required_keys = ['original', 'system1_result', 'system2_result', 'restored']
         if not all(key in self.intermediate_results for key in required_keys):
@@ -506,15 +554,21 @@ class ImpulseNoiseDetector:
                 )
         
         return summary_img
+    
 
 
+#Thêm nhiễu muối tiêu (salt-and-pepper) vào ảnh - phiên bản tối ưu hóa
+#salt_prob: xác suất cho nhiễu muối (giá trị 255)
+#pepper_prob: xác suất cho nhiễu tiêu (giá trị 0)
 def add_salt_pepper_noise(img, salt_prob, pepper_prob):
-    """Thêm nhiễu muối tiêu (salt-and-pepper) vào ảnh - phiên bản tối ưu hóa"""
     noisy_img = img.copy()
     height, width = img.shape
     
     # Tạo mặt nạ ngẫu nhiên
+    #salt_mask: mặt nạ cho nhiễu muối (giá trị 255)
     salt_mask = np.random.random((height, width)) < salt_prob
+
+    #pepper_mask: mặt nạ cho nhiễu tiêu (giá trị 0)
     pepper_mask = np.random.random((height, width)) < pepper_prob
     
     # Áp dụng mặt nạ
@@ -524,19 +578,19 @@ def add_salt_pepper_noise(img, salt_prob, pepper_prob):
     return noisy_img
 
 
-def process_image(input_path, output_dir, noise_level=0.3):
-    """
-    Xử lý ảnh đầu vào và tạo ảnh tổng hợp.
-    
-    Parameters:
-    -----------
-    input_path : str
-        Đường dẫn đến ảnh đầu vào
-    output_dir : str
-        Thư mục để lưu ảnh đầu ra
-    noise_level : float
-        Mức độ nhiễu (0.0-1.0)
-    """
+'''
+Xử lý ảnh đầu vào và tạo ảnh tổng hợp.
+
+Parameters:
+-----------
+input_path : str
+    Đường dẫn đến ảnh đầu vào
+output_dir : str
+    Thư mục để lưu ảnh đầu ra
+noise_level : float
+    Mức độ nhiễu (0.0-1.0)
+'''
+def process_image(input_path, output_dir, noise_level=0.2):
     # Đọc ảnh
     img = cv2.imread(input_path, cv2.IMREAD_GRAYSCALE)
     if img is None:
@@ -545,6 +599,7 @@ def process_image(input_path, output_dir, noise_level=0.3):
     
     # Lấy tên file
     file_name = os.path.basename(input_path)
+
     # Lấy tên file không có phần mở rộng
     name_without_ext = os.path.splitext(file_name)[0]
     
@@ -552,12 +607,19 @@ def process_image(input_path, output_dir, noise_level=0.3):
     os.makedirs(output_dir, exist_ok=True)
     
     print(f"Xử lý ảnh: {file_name} (kích thước: {img.shape})")
-    # thêm anh gốc vào ảnh đầu ra
+
     # Tạo ảnh nhiễu
     print(f"Tạo ảnh nhiễu với {noise_level*100:.0f}% nhiễu dương và {noise_level*100:.0f}% nhiễu âm...")
     noisy_img = add_salt_pepper_noise(img, noise_level, noise_level)
     
     # Khởi tạo bộ phát hiện nhiễu
+    # Các tham số cho bộ phát hiện nhiễu
+    # WE1, WE2, TE: Kích thước cửa sổ và ngưỡng cho hệ thống 1
+    # WD1, WD2, TD: Kích thước cửa sổ và ngưỡng cho hệ thống 2
+    # TN: Ngưỡng cho số lượng điểm nhiễu trong vùng biên
+    # TC: Ngưỡng cho số lượng điểm trong vùng phẳng của hệ thống 2
+    # TR: Tỷ lệ cho phép để xác minh điểm nhiễu
+
     detector = ImpulseNoiseDetector(
         WE1=5, WE2=7, TE=10,
         WD1=7, WD2=9, TD=30,
@@ -599,11 +661,8 @@ def process_image(input_path, output_dir, noise_level=0.3):
     
     return True
 
-
-def process_directory(input_dir, output_dir, noise_level=0.3):
-    """
-    Xử lý tất cả ảnh trong thư mục.
-    """
+# Xử lý tất cả ảnh trong thư mục
+def process_directory(input_dir, output_dir, noise_level=0.2):
     # Lấy danh sách các file ảnh
     image_extensions = ['.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff']
     image_files = []
@@ -625,10 +684,10 @@ def process_directory(input_dir, output_dir, noise_level=0.3):
 
 
 def main():
-    """Hàm chính"""
+    # parse : tham số đầu vào
     parser = argparse.ArgumentParser(description='Phục hồi ảnh nhiễu xung')
     parser.add_argument('input', help='Đường dẫn đến ảnh hoặc thư mục chứa ảnh')
-    parser.add_argument('-o', '--output', default='outputs', help='Thư mục đầu ra (mặc định: results)')
+    parser.add_argument('-o', '--output', default='outputs', help='Thư mục đầu ra')
     parser.add_argument('-n', '--noise', type=float, default=0.2, help='Mức độ nhiễu')
     
     args = parser.parse_args()
