@@ -432,8 +432,6 @@ class ImpulseNoiseDetector:
         # Lưu ảnh gốc (không nhiễu) vào danh sách các ảnh trung gian
         # Ảnh này sẽ được sử dụng để tính PSNR và hiển thị trong bảng so sánh
         self.intermediate_results['original'] = original_img
-
-        # Dòng bị comment - không cần lưu ảnh gốc ra file
         # cv2.imwrite("original.png", self.intermediate_results['original'] )
         
         # Phát hiện nhiễu xung trong ảnh
@@ -793,8 +791,9 @@ def process_directory(input_dir, output_dir, noise_level=0.2):
     image_files = []
     
     for ext in image_extensions:
+        # Tìm tất cả file ảnh trong thư mục với các định dạng khác nhau
         image_files.extend(glob.glob(os.path.join(input_dir, f"*{ext}")))
-        image_files.extend(glob.glob(os.path.join(input_dir, f"*{ext.upper()}")))
+        # image_files.extend(glob.glob(os.path.join(input_dir, f"*{ext.upper()}")))
     
     if not image_files:
         print(f"Không tìm thấy ảnh nào trong thư mục {input_dir}")
