@@ -5,8 +5,9 @@ import os # Dùng để tạo thư mục và lưu ảnh
 import warnings # Dùng để bỏ qua các cảnh báo
 from datetime import datetime 
 import glob # Dùng đệ quy tìm kiếm file
-import argparse # Dùng để xử lý các tham số đầu vào từ dòng lệnh
+import argparse
 
+#py -3.13 bestYYgpuSum.py inputs/1.jpg
 # Bỏ qua các cảnh báo
 warnings.filterwarnings("ignore")
 # Lưu trữ thông tin thời gian và các chỉ số
